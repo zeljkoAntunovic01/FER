@@ -1,0 +1,96 @@
+        ORG 0
+        B MAIN
+        ORG 0x18
+        B DMA_KRAJ ;gotov jedan prijenos ("broji do 5")
+        ORG 0x1C
+        B RTC_KRAJ ;odbrojao 5 sekundi -> krece novi prijenos (nova inicijalizacija DMAC-a)
+
+MAIN    ;inicijalizacija stogova
+        MOV R4, #0 ;brojac pocetni = 0
+        MSR CPSR, #0b11010010 ;prelazak u irq
+        MOV R13, #0x10000 ;inicijalizacija R13_irq (IRQ stoga)
+        
+        MSR CPSR, #0b11010011 ;prelazak u svc
+        MOV R13, #0xFC00 ;inicijalizacija R13_svc (SVC stoga)
+        
+        
+INITDMA ;inicijalizacija DMAC-a
+        LDR R1, DMAC ;adresa DMAC-a
+        MOV R0, #0x500
+        STR R0, [R1,#0x10] ;adresa izvora
+        MOV R0, #0x700
+        STR R0, [R1,#0x14] ;adresa odredista
+        MOV R0, #0x000A ;Burst size = 2^0 
+                        ;Transfer size = 00A = 10
+        STR R0, [R1,#0x18] 
+        MOV R0, #0b10101100 ;config
+                            ;IE = 1, DRE = 0, TW = 10 (WORD), SI =++, DI = ++, DRI =00 (not used)
+        STR R0, [R1,#0x1C]
+        
+        MRS R0, CPSR 
+        BIC R0, R0, #0b11000000 
+        MSR CPSR, R0 ;omoguci prekide IRQ i FIQ
+       
+        
+        MOV R0, #1
+        STR R0, [R1,#0] ;pokretanje DMA
+
+PETLJA  B PETLJA
+
+EXIT    SWI 123456 ;ako je brojac (R5) = 5 --> kraj simulacije
+
+DMA_KRAJ ;posluzivanje IRQ-a
+        ;inicijalizacija RTC-a koji broji do sljedeceg prijenosa
+        STMFD SP!, {R0,R1,R2} ;R4 koristimo kao globalnu varijablu pa ga ne stavljamo u kontekst
+
+
+
+        LDR R1, DMAC
+        STR R1, [R1,#0x4] ;brisanje statusa u DMAC-u
+        LDR R0, [R1,#0x14] ;ucitaj trenutnu destinaciju
+        LDR R2, KONST
+        STR R2, [R0,#0] ;zakljucaj blok sa 0x80808080
+
+        ADD R4, R4, #1 ;brojac++
+        CMP R4, #5
+        BEQ EXIT  ;ako je brojac = 5 --> kraj simulacije
+
+        LDR R0, RTC ;dohvati adresu RTC-a
+        MOV R1, #0
+        STR R1, [R0,#0x0C] ;pobrisati brojilo
+        MOV R1, #3
+        STR R1, [R0,#0x04] ;upisati konstantu brojenja u MR
+        MOV R1, #1
+        STR R1, [R0,#0x10] ;dozvoli prekid RTC-u
+        LDMFD SP!, {R0,R1,R2}
+        SUBS PC, LR, #4 ;povratak na PETLJA
+        
+        
+        
+RTC_KRAJ ;posluzivanje FIQ-a
+        ;inicijalizacija DMAC-a za novi prijenos
+ 
+        LDR R9, RTC  
+        STR R9, [R9, #0x8] ;brisanje statusa RTC-a
+
+        LDR R9, DMAC
+        MOV R10, #0x500
+        STR R10, [R9,#0x10] ;adresa izvora
+        MOV R10, #0x700
+        STR R10, [R9,#0x14] ;adresa odredista
+        MOV R10, #1
+        STR R10, [R9,#0] ;ponovno pokretanje DMA
+        
+        SUBS PC, LR, #4 ;povratak na PETLJA
+        
+        
+        
+        
+        
+KONST   DW 0x80808080  
+RTC     DW 0xFFFF0E00      
+DMAC    DW 0x00FF0000
+        ORG 0x500
+        ;upisite primjere
+        ORG 0x700
+        DS 450
